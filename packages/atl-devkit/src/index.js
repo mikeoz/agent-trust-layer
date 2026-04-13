@@ -46,3 +46,6 @@ module.exports = {
   createConsentGate,
   createAuditLogger
 };
+
+const { atlPresentCards, atlFillTemplate } = require('./present-cards');
+module.exports = { ...module.exports, atlPresentCards, atlFillTemplate };
