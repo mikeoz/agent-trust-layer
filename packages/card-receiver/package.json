@@ -1,7 +1,7 @@
 {
   "name": "@opnli/card-receiver",
-  "version": "0.1.0",
-  "description": "CARD Receiver SDK — validate incoming CARD Sets from CARD-Carrying Agents. For platforms adopting the Human Consent Layer.",
+  "version": "0.2.0",
+  "description": "CARD Receiver SDK — validate incoming CARD Sets from CARD-Carrying Agents. Define your service rules (CARD Issuer), validate agents (CARD Receiver), protect your API routes, and audit every access. For platforms joining the Opnli Trust Network.",
   "main": "src/index.js",
   "license": "Apache-2.0",
   "repository": "github:mikeoz/human-consent-layer",
@@ -12,7 +12,23 @@
     "agent",
     "hcl",
     "receiver",
-    "verification"
+    "issuer",
+    "verification",
+    "opnli",
+    "trust-network",
+    "medgraph",
+    "agent-economy"
   ],
-  "dependencies": {}
+  "scripts": {
+    "test": "node test/test-sdk.js"
+  },
+  "dependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "src/",
+    "examples/",
+    "README.md"
+  ]
 }

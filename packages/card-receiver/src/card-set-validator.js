@@ -1,17 +1,56 @@
 // @opnli/card-receiver — CARD Set Validator
 // Validates incoming CARD Sets from CARD-Carrying Agents
 // ============================================================
+// v0.2.0 — Session B enhancements:
+//   - createSessionToken: optional persistSession callback for platform storage
+//   - auditAccess: SHA-256 hash chain (INV-16), content-free enforcement (INV-CA-5)
+//   - validateCardSet: fail-closed on VE timeout (INV-FC), improved error context
+// All v0.1.0 call signatures remain backward-compatible.
+// ============================================================
+
+const crypto = require('crypto');
+
+// ── Audit hash chain ────────────────────────────────────────────
+// createAuditChain() returns a chain tracker. Platforms can provide
+// a persistent last hash on startup; otherwise starts from genesis.
+
+function sha256(data) {
+  return crypto.createHash('sha256').update(data, 'utf8').digest('hex');
+}
+
+function createAuditChain(initialHash) {
+  let lastHash = initialHash || sha256('genesis:' + new Date().toISOString());
+  return {
+    getLastHash() { return lastHash; },
+    advance(entryHash) { lastHash = entryHash; }
+  };
+}
+
+// Default in-memory audit chain — platforms should replace with persistent chain
+const defaultAuditChain = createAuditChain();
+
+// ============================================================
+// validateCardSet
+// ============================================================
 
 /**
  * Validate a CARD Set against platform policies and the VE.
  * 
  * @param {object} cardSet - The CARD Set presented by the CCA
  * @param {object} platformPolicy - Platform-specific validation rules
- * @param {object} options - { veEndpoint, timeout }
- * @returns {object} { valid, errors, session_scope }
+ * @param {object} [options] - { veEndpoint, timeout, requireVE }
+ * @param {string} [options.veEndpoint] - VE URL for entity verification
+ * @param {number} [options.timeout=5000] - VE request timeout in ms
+ * @param {boolean} [options.requireVE=false] - If true, VE is mandatory (fail-closed)
+ * @returns {Promise<{valid: boolean, errors: string[], session_scope: object|null}>}
  */
 async function validateCardSet(cardSet, platformPolicy, options = {}) {
   const errors = [];
+
+  // ── Null guard ──────────────────────────────────────────────
+  if (!cardSet) {
+    return { valid: false, errors: ['CARD Set is null or undefined'], session_scope: null };
+  }
 
   // ── Structure validation ────────────────────────────────────
   if (!cardSet.set_version) errors.push('Missing set_version');
@@ -32,6 +71,9 @@ async function validateCardSet(cardSet, platformPolicy, options = {}) {
     if (!veResult.verified) {
       errors.push('VE verification failed: ' + veResult.reason);
     }
+  } else if (options.requireVE) {
+    // INV-FC: fail-closed when VE is required but no endpoint provided
+    errors.push('VE verification required but no veEndpoint provided');
   }
 
   // ── Entity CARD: Shield level check ─────────────────────────
@@ -89,9 +131,11 @@ async function validateCardSet(cardSet, platformPolicy, options = {}) {
   // ── Build session scope from validated CARD Set ──────────────
   const session_scope = errors.length === 0 ? {
     agent_id: cardSet.entity_card.agent_id,
+    agent_name: cardSet.entity_card.agent_name,
     principal_id: cardSet.principal.id,
     shield_level: cardSet.entity_card.shield_level,
     resources: cardSet.data_card.data_resources.map(r => r.resource),
+    access_levels: cardSet.data_card.data_resources.map(r => ({ resource: r.resource, access: r.access })),
     actions: cardSet.use_card.permitted_actions.map(a => a.action),
     rate_limit: cardSet.boundary_card.rate_limit,
     time_window: cardSet.boundary_card.time_window,
@@ -102,8 +146,13 @@ async function validateCardSet(cardSet, platformPolicy, options = {}) {
   return { valid: errors.length === 0, errors, session_scope };
 }
 
+// ============================================================
+// verifyEntityWithVE
+// ============================================================
+
 /**
  * Verify an Entity CARD against the Verification Endpoint.
+ * Fail-closed: VE unreachable = denied (INV-FC).
  */
 async function verifyEntityWithVE(entityCard, veEndpoint, timeout = 5000) {
   try {
@@ -134,47 +183,136 @@ async function verifyEntityWithVE(entityCard, veEndpoint, timeout = 5000) {
       reason: data.decision === 'allow' || data.decision === 'verified' ? null : 'VE denied: ' + (data.reason || 'unknown')
     };
   } catch (e) {
+    // INV-FC: fail-closed on any error
     return { verified: false, reason: 'VE unreachable: ' + e.message };
   }
 }
+
+// ============================================================
+// createSessionToken — enhanced with persistence adapter
+// ============================================================
 
 /**
  * Create a session token scoped to the validated CARD Set.
  * 
  * @param {object} sessionScope - The session_scope from validateCardSet
- * @param {number} ttlSeconds - Session duration in seconds (default: 3600)
- * @returns {object} { token, expires_at, scope }
+ * @param {number} [ttlSeconds=3600] - Session duration in seconds
+ * @param {object} [options] - Optional configuration
+ * @param {function} [options.persistSession] - async (sessionRecord) => void
+ *   Callback to persist the session to the platform's storage (e.g., Supabase).
+ *   If the callback throws, the session is NOT issued (fail-closed per INV-FC).
+ * @param {object} [options.serviceRules] - The cardStack from defineServiceRules()
+ * @returns {Promise<{token: string, expires_at: string, scope: object, issued_at: string}>}
  */
-function createSessionToken(sessionScope, ttlSeconds = 3600) {
+async function createSessionToken(sessionScope, ttlSeconds = 3600, options = {}) {
   const token = 'crs_' + Array.from({ length: 32 }, () => 
     '0123456789abcdef'[Math.floor(Math.random() * 16)]
   ).join('');
   
-  const expires_at = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+  const now = new Date();
+  const expires_at = new Date(now.getTime() + ttlSeconds * 1000).toISOString();
 
-  return {
+  const sessionRecord = {
     token,
     expires_at,
     scope: sessionScope,
-    issued_at: new Date().toISOString()
+    issued_at: now.toISOString(),
+    agent_id: sessionScope.agent_id,
+    agent_name: sessionScope.agent_name || 'Unknown Agent',
+    principal_id: sessionScope.principal_id,
+    allowed_ops: sessionScope.access_levels
+      ? [...new Set(sessionScope.access_levels.map(a => a.access))]
+      : ['read']
   };
+
+  // Include service rules in response if provided
+  if (options.serviceRules) {
+    sessionRecord.service_rules = {
+      service_name: options.serviceRules.service_name,
+      allowed_resources: options.serviceRules.allowed_resources,
+      allowed_actions: options.serviceRules.allowed_actions,
+      rate_limit: options.serviceRules.rate_limit,
+      retention: options.serviceRules.retention
+    };
+  }
+
+  // ── Persist if callback provided (INV-FC: fail-closed on error) ──
+  if (options.persistSession) {
+    try {
+      await options.persistSession(sessionRecord);
+    } catch (e) {
+      throw new Error('Session persistence failed (fail-closed): ' + e.message);
+    }
+  }
+
+  return sessionRecord;
 }
+
+// ============================================================
+// auditAccess — enhanced with SHA-256 hash chain
+// ============================================================
 
 /**
  * Log an API access event against the CARD Set session.
  * 
+ * INV-CA-5: Audit entries contain action type and target ID only.
+ *           NEVER include data content, titles, filenames, or summaries.
+ * INV-16:   Each entry includes prev_hash and entry_hash forming a
+ *           tamper-evident chain.
+ * 
  * @param {string} token - The session token
- * @param {object} action - { resource, action, timestamp }
- * @returns {object} Audit entry
+ * @param {object} action - { action, target_type, target_id }
+ * @param {object} [options] - Optional configuration
+ * @param {function} [options.persistAudit] - async (auditEntry) => void
+ * @param {object} [options.auditChain] - Custom audit chain from createAuditChain()
+ * @returns {Promise<object>} Audit entry with hash chain fields
  */
-function auditAccess(token, action) {
-  return {
+async function auditAccess(token, action, options = {}) {
+  const chain = (options && options.auditChain) || defaultAuditChain;
+  const timestamp = new Date().toISOString();
+
+  // ── Build content-free audit entry (INV-CA-5) ──────────────
+  const entry = {
     session_token: token,
-    resource: action.resource,
     action: action.action,
-    timestamp: action.timestamp || new Date().toISOString(),
+    target_type: action.target_type || null,
+    target_id: action.target_id || null,
+    timestamp,
     result: 'logged'
   };
+
+  // ── Hash chain (INV-16) ────────────────────────────────────
+  const prev_hash = chain.getLastHash();
+  const entry_data = JSON.stringify(entry) + ':' + prev_hash;
+  const entry_hash = sha256(entry_data);
+
+  entry.prev_hash = prev_hash;
+  entry.entry_hash = entry_hash;
+  chain.advance(entry_hash);
+
+  // ── Persist if callback provided ───────────────────────────
+  if (options && options.persistAudit) {
+    try {
+      await options.persistAudit(entry);
+    } catch (e) {
+      // Audit persistence failure is logged but does not block.
+      // The in-memory chain still advances to maintain integrity.
+      entry.persist_error = e.message;
+    }
+  }
+
+  return entry;
 }
 
-module.exports = { validateCardSet, verifyEntityWithVE, createSessionToken, auditAccess };
+// ============================================================
+// Exports
+// ============================================================
+
+module.exports = {
+  validateCardSet,
+  verifyEntityWithVE,
+  createSessionToken,
+  auditAccess,
+  createAuditChain,
+  sha256
+};

@@ -1,0 +1,112 @@
+{
+  "_comment": "MedGraph Health Data Access — CARD Set Template v0.1.0. This is the CARD Stack that MedGraph requires from CARD-Carrying Agents. Fill in principal.id, entity_card.agent_id, entity_card.principal_id, and entity_card.certification_hash before presentation.",
+  "set_version": "0.1.0",
+  "set_id": "urn:uuid:GENERATE-BEFORE-PRESENTATION",
+  "presented_at": "FILL-AT-PRESENTATION-TIME",
+  "expires_at": null,
+  "principal": {
+    "id": "card:entity:user-FILL-IN",
+    "type": "nhb",
+    "signature": null
+  },
+  "entity_card": {
+    "card_type": "entity",
+    "agent_id": "card:entity:agent-FILL-IN",
+    "agent_name": "BigCROC",
+    "principal_id": "card:entity:user-FILL-IN",
+    "platform": "CROCbox / OpenClaw Gateway",
+    "shield_level": "green",
+    "tno_id": "opn.li",
+    "ve_endpoint": "https://ve-staging.opn.li/verify",
+    "certification_hash": null,
+    "delegation_vrcs": null
+  },
+  "data_card": {
+    "card_type": "data",
+    "data_resources": [
+      {
+        "resource": "medical_records",
+        "access": "read",
+        "description": "Read health records including lab results, journal entries, and uploaded documents"
+      }
+    ],
+    "excluded_resources": [
+      {
+        "resource": "account_settings",
+        "reason": "Agent may not change account configuration"
+      },
+      {
+        "resource": "consent_agreements",
+        "reason": "Agent may not view or modify consent agreements"
+      },
+      {
+        "resource": "audit_events",
+        "reason": "Agent may not access the audit trail"
+      },
+      {
+        "resource": "user_credentials",
+        "reason": "Agent has no access to authentication credentials"
+      }
+    ],
+    "data_format": "JSON",
+    "nhb_readable_summary": "Your agent can read your medical records — lab results, journal entries, and uploaded documents. It cannot change your account settings or view consent history."
+  },
+  "use_card": {
+    "card_type": "use",
+    "permitted_actions": [
+      {
+        "action": "summarize",
+        "description": "Summarize lab results and health records in plain language"
+      },
+      {
+        "action": "search",
+        "description": "Search across your health records for specific conditions, dates, or results"
+      },
+      {
+        "action": "compare",
+        "description": "Compare results over time to identify trends"
+      }
+    ],
+    "prohibited_actions": [
+      {
+        "action": "write",
+        "reason": "Agent may not modify or create health records"
+      },
+      {
+        "action": "delete",
+        "reason": "Agent may not delete any records"
+      },
+      {
+        "action": "share",
+        "reason": "Agent may not share records with third parties"
+      },
+      {
+        "action": "diagnose",
+        "reason": "Agent may not provide medical diagnoses"
+      },
+      {
+        "action": "export_bulk",
+        "reason": "Agent may not bulk-download records for external storage"
+      }
+    ],
+    "nhb_readable_summary": "Your agent can summarize, search, and compare your health records. It cannot modify records, share them, or make diagnoses."
+  },
+  "boundary_card": {
+    "card_type": "boundary",
+    "constraint_domain": "healthcare-access",
+    "time_window": null,
+    "rate_limit": {
+      "calls_per_day": 720,
+      "calls_per_minute": 5
+    },
+    "scope_constraints": {
+      "retention": "session_only",
+      "session_ttl_seconds": 3600,
+      "cache_allowed": false,
+      "data_leaves_service": false
+    },
+    "require_confirmation": true,
+    "nhb_readable_summary": "This session only — no data retained after you close CROCbox. Up to 5 requests per minute. Your health data never leaves MedGraph."
+  },
+  "tno_attestation": null
+}
